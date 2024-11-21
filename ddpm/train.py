@@ -101,7 +101,7 @@ class DiffusionModel:
                 self.optimizer.step()
 
                 # EMA update
-                self.ema.step(self.model)
+                if config['use_ema']: self.ema.step(self.model)
 
                 # Metrics
                 mse = loss.item()

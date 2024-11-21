@@ -8,6 +8,8 @@ import torch
 from schedule import DiffusionSchedule, LinearSchedule
 from utils import get_device, save_images, load_config
 
+from model import UNet
+
 # Logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
