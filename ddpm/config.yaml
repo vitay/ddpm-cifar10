@@ -1,7 +1,18 @@
+# Basic training parameters
 batch_size: 128 # Batch size
 num_epochs: 100 # Number of epochs for training
+img_size: 32 # Size of the generated images
 learning_rate: 0.0002 # Learning rate
+
+# Checkpoints
+trained-checkpoint: "./checkpoints/trainedmodel-checkpoint.pt"
+ema-checkpoint: "./checkpoints/emamodel-checkpoint.pt"
+
+# Diffusion process
 noise_steps: 1000 # Number of steps for the reverse diffusion
 beta_start: 0.0001 # Noise schedule start
 beta_end: 0.02 # Noise schedule end
-beta_ema: 0.9999 # Smoothing value for EMA
+
+# EMA
+use_ema: false # Weether to use EMA
+beta_ema: 0.999 # Smoothing value for EMA

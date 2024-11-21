@@ -26,7 +26,7 @@ class EMA:
 
     def step(self, model):
         """
-        Pwerforms one EMA step on the model.
+        Performs one EMA step on the model.
         """
         self.nb_steps += 1
 

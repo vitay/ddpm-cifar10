@@ -12,9 +12,10 @@ import torch.nn.functional as F
 import wandb
 
 from datasets import get_cifar10
-from cifar_test import train_CNN
-from model import UNet, EMA
 from utils import get_device, save_images, create_directory, load_config
+from model import UNet, EMA
+from schedule import DiffusionSchedule, LinearSchedule
+from inference import sample
 
 # Logging
 logging.basicConfig(level=logging.INFO, 
@@ -29,33 +30,26 @@ class DiffusionModel:
         # Parameters
         self.config = config
         self.noise_steps = config['noise_steps']
-        self.beta_start = config['beta_start']
-        self.beta_end = config['beta_end']
         self.img_size = img_size
         self.device = device
 
         # Noise schedule
-        self.beta = self.prepare_noise_schedule().to(device)
-        self.alpha = 1. - self.beta
-        self.alpha_hat = torch.cumprod(self.alpha, dim=0)
+        self.schedule = LinearSchedule(config['beta_start'], config['beta_end'], config['noise_steps'], self.device)
 
         # UNet model
         self.model = UNet().to(device)
 
         # Exponentially moving average
-        self.ema = EMA(self.model, beta=config['beta_ema'], device=device)
+        if config['use_ema']:
+            self.ema = EMA(self.model, beta=config['beta_ema'], device=device)
 
         # Optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config['learning_rate'])
         self.criterion = nn.MSELoss()
 
-    def prepare_noise_schedule(self):
-        "Linear noise schedule between beta_start and beta_end over T steps."
-
-        return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
 
     def noise_images(self, x, t):
-        """
+        r"""
         Adds noise to the image x corresponding to the schedule at time t.
 
         $$
@@ -63,57 +57,14 @@ class DiffusionModel:
         $$
         """
 
-        sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
+        sqrt_alpha_hat = torch.sqrt(self.schedule.alpha_hat[t])[:, None, None, None]
 
-        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
+        sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.schedule.alpha_hat[t])[:, None, None, None]
 
         epsilon = torch.randn_like(x)
 
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
 
-    def sample_timesteps(self, n):
-        "Return n time steps sampled between 0 and T."
-        return torch.randint(low=1, high=self.noise_steps, size=(n,))
-
-    def sample(self, n):
-        "Returns $n$ samples using the EMA model"
-        logging.info(f"Sampling {n} new images....")
-        
-        self.model.eval()
-
-        with torch.no_grad():
-
-            # Input noise
-            x = torch.randn((n, 3, self.img_size, self.img_size)).to(self.device)
-        
-            # Iterate backwards over time
-            for i in tqdm.tqdm(reversed(range(1, self.noise_steps)), position=0):
-        
-                # Time tensor
-                t = (torch.ones(n) * i).long().to(self.device)
-        
-                # Predict noise
-                predicted_noise = self.ema.model(x, t)
-        
-                # Noise schedule
-                alpha = self.alpha[t][:, None, None, None]
-                alpha_hat = self.alpha_hat[t][:, None, None, None]
-                beta = self.beta[t][:, None, None, None]
-
-                # Last step does not get noise
-                if i > 1:
-                    noise = torch.randn_like(x)
-                else:
-                    noise = torch.zeros_like(x)
-                
-                # Interpolation
-                x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
-        
-        # Clamping to get a real image
-        x = (x.clamp(-1, 1) + 1) / 2
-        x = (x * 255).type(torch.uint8)
-
-        return x
 
 
     def train(self, train_loader):
@@ -124,13 +75,16 @@ class DiffusionModel:
             running_mse = 0.0
             num_samples = 0
 
+            self.model.train()
+
             pbar = tqdm.tqdm(train_loader)
             for i, (images, _) in enumerate(pbar):
+
                 # Get images
                 images = images.to(self.device)
 
                 # Get the time step
-                t = self.sample_timesteps(images.shape[0]).to(self.device)
+                t = self.schedule.sample(images.shape[0]).to(self.device)
 
                 # Create the target
                 x_t, noise = self.noise_images(images, t)
@@ -160,15 +114,19 @@ class DiffusionModel:
             logging.info(f"MSE: {mse_epoch}:")
 
             # Validation
-            sampled_images = self.sample(n=config['batch_size'])
-            filename = os.path.join("results", f"{epoch}.jpg")
-            save_images(sampled_images,filename)
+            model = self.ema_model if config['use_ema'] else self.model
+            sampled_images = sample(model=model, schedule=self.schedule, n=config['batch_size'], img_size=config['img_size'], T=config['noise_steps'], device=self.device)
+
+            # Save the images
+            filename = f"results/{epoch}.jpg"
+            save_images(sampled_images, filename)
 
             # Log
             if not config['no_wandb']: wandb.log({"mse": mse_epoch, "generation": wandb.Image(filename)})
 
             # Save checkpoint
-            torch.save(self.model.state_dict(), os.path.join("checkpoints", f"ddpm-ckpt.pt"))
+            torch.save(self.model.state_dict(), config['trained-checkpoint'])
+            torch.save(self.ema.model.state_dict(), config['ema-checkpoint'])
 
 # Main training loop
 def main(config):
@@ -189,11 +147,15 @@ def main(config):
     logging.info(f"Training set: {len(train_data)} samples, input shape {train_data[0][0].shape}")
 
     # Create diffusion model
-    diffusion = DiffusionModel(config=config, img_size=32, device=device)
+    logging.info("Create the UNet model")
+    diffusion = DiffusionModel(config=config, img_size=config['img_size'], device=device)
 
     # Initial generation
-    sampled_images = diffusion.sample(n=config['batch_size'])
-    filename = os.path.join("results", f"initial.jpg")
+    logging.info("Initial sampling")
+    sampled_images = sample(model=diffusion.model, schedule=diffusion.schedule, n=config['batch_size'], img_size=config['img_size'], T=config['noise_steps'], device=device)
+
+    # Save the image
+    filename = f"results/initial.jpg"
     save_images(sampled_images, filename)
     if not config['no_wandb']: wandb.log({"generation": wandb.Image(filename)})
 
