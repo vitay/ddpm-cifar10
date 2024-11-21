@@ -22,16 +22,16 @@ class EMA:
         self.model.to(device)
 
         # Step
-        self.step = 0
+        self.nb_steps = 0
 
     def step(self, model):
         """
         Pwerforms one EMA step on the model.
         """
-        self.step += 1
+        self.nb_steps += 1
 
         # Warmup phase
-        if self.step < self.warmup:
+        if self.nb_steps < self.warmup:
             return
         
         # Parameter smoothing
