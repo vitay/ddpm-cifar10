@@ -3,6 +3,7 @@ import argparse
 import yaml
 import logging
 import tqdm
+import copy
 
 import torch
 import torch.nn as nn
@@ -12,25 +13,12 @@ import wandb
 
 from datasets import get_cifar10
 from cifar_test import train_CNN
-from model import UNet
-from utils import get_device, save_images, create_directory
+from model import UNet, EMA
+from utils import get_device, save_images, create_directory, load_config
 
 # Logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Load configuration
-def load_config(config_path):
-    """Load the YAML configuration file."""
-    with open(config_path, 'r') as file:
-        return yaml.safe_load(file)
-
-def merge_configs(config, overrides):
-    """Merge YAML config with command-line overrides."""
-    for key, value in vars(overrides).items():
-        if value is not None:  # Override only if the value is explicitly set
-            config[key] = value
-    return config
 
 
 # Original DDPM model
@@ -53,31 +41,42 @@ class DiffusionModel:
 
         # UNet model
         self.model = UNet().to(device)
+
+        # Exponentially moving average
+        self.ema = EMA(self.model, beta=config['beta_ema'], device=device)
+
+        # Optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config['learning_rate'])
         self.criterion = nn.MSELoss()
 
     def prepare_noise_schedule(self):
-        "Linear noise schedule."
+        "Linear noise schedule between beta_start and beta_end over T steps."
 
         return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
 
     def noise_images(self, x, t):
-        "Adds noise to the image x corresponding to the schedule at time t."
+        """
+        Adds noise to the image x corresponding to the schedule at time t.
+
+        $$
+            x_t = \sqrt{\bar{\alpha}_t} \, x_0 +  \sqrt{1 - \bar{\alpha}_t} \, \epsilon_t \;\; \text{where} \; \epsilon_t \sim \mathcal{N}(0, I)
+        $$
+        """
 
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
 
         sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
 
-        Ɛ = torch.randn_like(x)
+        epsilon = torch.randn_like(x)
 
-        return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ, Ɛ
+        return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * epsilon, epsilon
 
     def sample_timesteps(self, n):
         "Return n time steps sampled between 0 and T."
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
 
     def sample(self, n):
-        "Returns "
+        "Returns $n$ samples using the EMA model"
         logging.info(f"Sampling {n} new images....")
         
         self.model.eval()
@@ -94,7 +93,7 @@ class DiffusionModel:
                 t = (torch.ones(n) * i).long().to(self.device)
         
                 # Predict noise
-                predicted_noise = self.model(x, t)
+                predicted_noise = self.ema.model(x, t)
         
                 # Noise schedule
                 alpha = self.alpha[t][:, None, None, None]
@@ -147,6 +146,9 @@ class DiffusionModel:
                 loss.backward()
                 self.optimizer.step()
 
+                # EMA update
+                self.ema.step(self.model)
+
                 # Metrics
                 mse = loss.item()
                 running_mse += mse
@@ -156,13 +158,14 @@ class DiffusionModel:
             # Epoch mse
             mse_epoch = running_mse/num_samples
             logging.info(f"MSE: {mse_epoch}:")
-            wandb.log({"mse": mse_epoch})
 
             # Validation
             sampled_images = self.sample(n=config['batch_size'])
             filename = os.path.join("results", f"{epoch}.jpg")
             save_images(sampled_images,filename)
-            wandb.log({"generation": wandb.Image(filename)})
+
+            # Log
+            if not config['no_wandb']: wandb.log({"mse": mse_epoch, "generation": wandb.Image(filename)})
 
             # Save checkpoint
             torch.save(self.model.state_dict(), os.path.join("checkpoints", f"ddpm-ckpt.pt"))
@@ -171,7 +174,7 @@ class DiffusionModel:
 def main(config):
 
     # Wandb logging
-    run = wandb.init(project="DDPM-CIFAR10", config=config)
+    if not config['no_wandb']: run = wandb.init(project="DDPM-CIFAR10", config=config)
 
     # Select hardware: 
     device = get_device()
@@ -192,7 +195,7 @@ def main(config):
     sampled_images = diffusion.sample(n=config['batch_size'])
     filename = os.path.join("results", f"initial.jpg")
     save_images(sampled_images, filename)
-    wandb.log({"generation": wandb.Image(filename)})
+    if not config['no_wandb']: wandb.log({"generation": wandb.Image(filename)})
 
     # Train the diffusion model
     diffusion.train(train_loader)
@@ -201,13 +204,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train DDPM on the dataset.")
     parser.add_argument('--config', type=str, default='config.yaml', help='Path to the configuration file (default: config.yaml)')
+    parser.add_argument('--no-wandb', action="store_true", help="Whether to log with Weights and Biases (offline mode).")
     parser.add_argument('--batch_size', type=int, help="Batch size.")
     parser.add_argument('--num_epochs', type=int, help="Number of epochs.")
 
     # Parse arguments
     args = parser.parse_args()
-    config = load_config(args.config)
-    config = merge_configs(config, args)
-
+    config = load_config(args)
     logging.info(config)
+
+    # Main loop
     main(config)

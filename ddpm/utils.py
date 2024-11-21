@@ -1,4 +1,5 @@
 import os, sys
+import yaml
 import logging
 
 import torch
@@ -43,3 +44,16 @@ def create_directory(directory_list):
         if not os.path.exists(path):
             logging.info(f"Creating directory: {path}")
             os.makedirs(path)
+
+
+# Load configuration
+def load_config(args):
+    """Load the YAML configuration file."""
+    with open(args.config, 'r') as file:
+        config = yaml.safe_load(file)
+
+    # Merge YAML config with command-line overrides.
+    for key, value in vars(args).items():
+        if value is not None:  # Override only if the value is explicitly set
+            config[key] = value
+    return config

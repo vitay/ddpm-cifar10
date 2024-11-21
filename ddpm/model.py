@@ -1,12 +1,45 @@
 # UNET implementation from:
 # https://github.com/mattroz/diffusion-ddpm
 
+import copy
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from utils import get_device
+
+
+class EMA:
+    def __init__(self, model, beta, warmup=2000, device='cpu'):
+        
+        # Parameters
+        self.beta = beta
+        self.warmup = warmup
+
+        # Deep copy of the network
+        self.model = copy.deepcopy(model).eval().requires_grad_(False)
+        self.model.to(device)
+
+        # Step
+        self.step = 0
+
+    def step(self, model):
+        """
+        Pwerforms one EMA step on the model.
+        """
+        self.step += 1
+
+        # Warmup phase
+        if self.step < self.warmup:
+            return
+        
+        # Parameter smoothing
+        for new_params, ema_params in zip(model.parameters(), self.model.parameters()):
+            ema_params.data = ema_params.data * self.beta + (1 - self.beta) * new_params.data
+
+    def reset(self, model):
+        self.model.load_state_dict(model.state_dict())
 
 class TransformerPositionalEmbedding(nn.Module):
     """
