@@ -126,7 +126,7 @@ class DiffusionModel:
 
             # Save checkpoint
             torch.save(self.model.state_dict(), config['trained-checkpoint'])
-            torch.save(self.ema.model.state_dict(), config['ema-checkpoint'])
+            if config['use_ema']: torch.save(self.ema.model.state_dict(), config['ema-checkpoint'])
 
 # Main training loop
 def main(config):
