@@ -24,6 +24,8 @@ def sample(model: "UNet", schedule:DiffusionSchedule, n:int, img_size:int, T:int
     * schedule: schedule for alpha and beta
     * n: number of samples to return
     * img_size: size of the image (e.g. 32)
+    * T: number of diffusion steps
+    * device: device where the model should lie.
 
     """
     logging.info(f"Sampling {n} new images....")
@@ -65,6 +67,8 @@ def sample(model: "UNet", schedule:DiffusionSchedule, n:int, img_size:int, T:int
     return x
 
 def test_model(config):
+
+    # Get the device
     device = get_device()
 
     # Create model and schedule
@@ -82,6 +86,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate images using the saved model")
     parser.add_argument('--model', type=str, default="checkpoints/emamodel-checkpoint.pt", help="Name of the file.")
     parser.add_argument('--n', type=int, default=64, help="Number of images to generate.")
+    parser.add_argument('--batch-size', type=int, help="Batch size.")
 
     # Parse arguments
     args = parser.parse_args()

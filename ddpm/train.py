@@ -167,7 +167,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DDPM on the dataset.")
     parser.add_argument('--config', type=str, default='config.yaml', help='Path to the configuration file (default: config.yaml)')
     parser.add_argument('--no-wandb', action="store_true", help="Whether to log with Weights and Biases (offline mode).")
-    parser.add_argument('--batch_size', type=int, help="Batch size.")
+    parser.add_argument('--use-ema', action="store_true", help="Whether to use ema.")
+    parser.add_argument('--batch-size', type=int, help="Batch size.")
     parser.add_argument('--num_epochs', type=int, help="Number of epochs.")
 
     # Parse arguments

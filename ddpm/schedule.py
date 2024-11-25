@@ -1,6 +1,6 @@
 import torch
 
-
+# Global class, just for hinting
 class DiffusionSchedule: pass
 
 # Linear Schedule
